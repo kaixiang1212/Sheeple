@@ -1,0 +1,5 @@
+Date    Start   Stop    Activity    Comments
+23/7/20 2:15    2:40    Reading     Read assignment specifications
+23/7/20 2:45    3:50    Coding      Completed subset 0 implementation
+23/7/20 4:00    4:25    Debugging   found bug when echo with quotes 
+23/7/20 5:00    6:00    Coding      Completed subset 1 implementation
