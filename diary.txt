@@ -6,3 +6,4 @@ Date    Start   Stop    Activity    Comments
 23/7/20 8:00    8:30    Debugging   Fixed double quote in single quote fail
 23/7/20 9:00    9:20    Coding      Implemented if statement
 06/8/20 6:40    7:50    Coding      Implemented while loop and conditional statement
+07/8/20 2:00    3:05    Coding      Implemented evaluate expressions, backquote and dollar bracket syntax

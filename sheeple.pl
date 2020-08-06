@@ -2,24 +2,33 @@
 
 $in_function = 0;
 
+# ==================== Main ====================
 while (<>){
     chomp $_;
-    # TODO Split ;
+    if ($_ eq ""){
+        print "\n";
+        next;
+    }
+    # TODO split ';' into multiple lines
     $indent = get_indentation($_);
     my $line = translate($_);
     $line = replace_argv($line);
-    print indent($line) . "\n" if $line ne "";
+    print indent($line) . "\n" if $line ne "" && $line ne "\n";
 }
 
+# ==================== Functions ====================
+
+# Get indentation
 sub get_indentation {
     my $space = 0;
     while (/^\s/){
         $_ =~ s/^\s//;
         $space++;
     }
-    return $space;
+    return $space - 1;
 }
 
+# Indent the given string
 sub indent {
     my ($line) = @_;
     if ($indent != 0) {
@@ -52,17 +61,21 @@ sub translate {
     # For loop
     $line = translate_for_loop($_);
     return $line if $line ne "";
+    # While loop
     $line = translate_while_loop($_);
     return $line if $line ne "";
     # Else
-    $line = translate_unknown_cmd($_) if $line ne "";
+    $line = translate_unknown_cmd($_);
     return $line;
 }
 
+# Translate unrecognised system command
 sub translate_unknown_cmd {
-    return "system \"$1\";";
+    my ($cmd) = @_;
+    return "system \"$cmd\";";
 }
 
+# Translate system command
 sub translate_sys_cmd {
     # =============== echo ===============
     # Case 1: Double quote
@@ -90,12 +103,24 @@ sub translate_sys_cmd {
     return "\$$1 = <STDIN>;" . indent("chomp \$$1;") if /^read (.*)/;
 }
 
+# Translate program header
 sub translate_header {
     return "#!/usr/bin/perl -w" if /#!\/bin\/dash/;
 }
 
+# Translate variable assignment
 sub translate_var_assignment {
     return "\$$1 = '$2';" if (/^(\w+)=(\w+)$/);
+    if (/^(\w+)=`(.+)`/) {
+        return "\$$1 = " . parse_backquote($2) . ";";
+    } elsif (/^(\w+)=\$\(\((.+)\)\)/) {
+        return "\$$1 = " .  parse_expr($2) . ";"
+    }
+    elsif (/^(\w+)=\$\((.+)\)/) {
+        return "\$$1 = " . parse_backquote($2) . ";"
+    } elsif (/^(\w+)=\$(.+)$/) {
+        return "\$$1 = \$$2;";
+    }
 }
 
 # TODO: Comment after code on the same line
@@ -103,11 +128,12 @@ sub translate_comment {
     return $_ if /^#/;
 }
 
+# Translate for loop
 sub translate_for_loop {
     # Case 1: done
     return "}" if /^done/;
     # Case 2: do
-    return "" if /^do/;
+    return "\n" if /^do/;
     # Case 3: for () in ()
     if (/^for (.+) in (.*)/){
         my $variable = ($1);
@@ -116,8 +142,9 @@ sub translate_for_loop {
     }
 }
 
+# Translate if statement
 sub translate_if_statement {
-    return "" if /^then/;
+    return "\n" if /^then/;
     my ($line) = @_;
     if (/^if (.*)/) {
         my $condition = parse_test_statement($1);
@@ -132,7 +159,7 @@ sub translate_if_statement {
     }
 }
 
-# TODO: Subset 2 
+# Translate while loop
 sub translate_while_loop {
     my ($line) = @_;
     if (/^while (.*)/) {
@@ -160,6 +187,9 @@ sub process_loop_list {
 
 sub replace_argv {
     my ($line) = @_;
+    $line =~ s/"?\$@"?/\@ARGV/g;
+    $line =~ s/"?\$\*"?/\@ARGV/g;
+    $line =~ s/\$#/\$#ARGV + 1/g;
     if ($in_function) {
 
     } else {
@@ -172,6 +202,7 @@ sub replace_argv {
     }
 }
 
+# Process various test synopsis
 sub parse_test_statement {
     my ($statement) = @_;
     if ($statement =~ /^test (.*)$/){
@@ -183,6 +214,7 @@ sub parse_test_statement {
     return $other if $other ne "";
 }
 
+# Process conditions
 sub parse_condition {
     my ($condition) = @_;
     
@@ -193,7 +225,7 @@ sub parse_condition {
     # 2 Argument comparison
     $condition =~ /^(.+) (.+) (.+)/;
     if ($3){
-        # TODO: Parameter process Variable / String / Int ?
+        # Parameter process
         my $p1 = parse_condition_args($1);
         my $p2 = parse_condition_args($3);
         # String
@@ -208,13 +240,12 @@ sub parse_condition {
         elsif ($2 eq "-ne") { return "$p1 != $p2"; }    #  () -ne ()  ->  () != ()
     } else {
         $condition =~ /^(.+) (.+)/;
-        # TODO: Parameter process Variable / String / Int?
+        # Parameter process
         my $p = parse_condition_args($2);
+        # Zero / Non-zero String
         if    ($1 eq "-n") { return "$p != \"\""; }     # -n ()  ->  () != ""
         elsif ($1 eq "-z") { return "$p == \"\""; }     # -z ()  ->  () == ""
-        # TODO:  operation
-        #       -f ()
-        #       -d ()
+        # File operations
         if ($1 eq "-r" || 
             $1 eq "-d" ||
             $1 eq "-f ") { return "$1 $p"; }
@@ -225,6 +256,7 @@ sub parse_condition {
     # || Operation
 }
 
+# Process argument in conditional statement
 sub parse_condition_args {
     my ($param) = @_;
     if ($param =~ /^\$(.*)/){
@@ -234,4 +266,25 @@ sub parse_condition_args {
     } else {
         return "\'$param\'";
     }
+}
+
+sub parse_backquote {
+    my ($statement) = @_;
+    if ($statement =~ /^(\w+)\s(.*)/){
+        if ($1 eq "expr") { return parse_expr($2); }
+    }
+}
+
+sub parse_expr {
+    my ($args) = @_;
+    $args =~ s/^(\$?\w+)//;
+    my $expr = $1;
+    $expr =~ s/\$?(\w+)/\$$1/g  if ($expr =~ /[A-Za-z]/g);
+
+    while ($args =~ s/^\s*([-+*%\/])\s*(\$?\w+)//) {
+        my $p = $2;
+        $p =~ s/\$?(\w+)/\$$1/g if ($2 =~ /[A-Za-z]/g);
+        $expr .= " $1 $2";
+    }
+    return $expr;
 }
