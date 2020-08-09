@@ -9,14 +9,39 @@ while (<>){
         print "\n";
         next;
     }
+    $comment = "";
+    # Comment after line
+    get_and_remove_comments();
     # TODO split ';' into multiple lines
     $indent = get_indentation($_);
+
+    if ($_ eq ""){
+        print indent(append_comment("")) . "\n";
+        next;
+    }
+
     my $line = translate($_);
     $line = replace_argv($line);
+    $line = append_comment($line);
     print indent($line) . "\n" if $line ne "" && $line ne "\n";
 }
 
 # ==================== Functions ====================
+
+# Get Comments after line
+sub get_and_remove_comments {
+    return if $_ eq "#!/bin/dash";
+    if (/^[^\$]*(#.*)$/){
+        s/(\s*)(#.*)//;
+        $comment = "$1$2";
+    }
+}
+
+sub append_comment {
+    my ($line) = @_;
+    $line .= $comment;
+    return $line;
+}
 
 # Get indentation
 sub get_indentation {
@@ -46,9 +71,6 @@ sub translate {
     # Header
     $line = translate_header($_);
     return $line if $line ne "";
-    # Comments
-    $line = translate_comment($_);
-    return $line if $line ne "";
     # Shell functions
     $line = translate_sys_cmd($_);
     return $line if $line ne "";
@@ -77,30 +99,59 @@ sub translate_unknown_cmd {
 
 # Translate system command
 sub translate_sys_cmd {
-    # =============== echo ===============
-    # Case 1: Double quote
-    if (/^echo "(.*)"/) {
-        my $string = $1;
-        $string =~ s/\\/\\\\/g;
-        $string =~ s/\\\\"/\\"/g;
-        return "print \"$string\\n\";";
-    }
-    # Case 2: Single quote
-    if (/^echo '(.*)'$/) {
-        my $string = $1;
-        $string =~ s/'\\''/'/gi;
-        $string =~ s/"/\\"/g;
-        return "print \"$string\\n\";";
-    }
-    # Case 3: No quote
-    return "print \"$1\\n\";" if /^echo (.*)$/;
+    my ($statement) = @_;
+    if ($statement =~ /^(\w+)\s(.*)/) {
+        my $cmd = $1;
+        my $args = $2;
 
-    # =============== cd ===============
-    return "chdir '$1';" if /^cd (.*)/;
+        # =============== echo ===============
+        if ($cmd eq "echo"){
+            my $retval = "";
+            my $newline = "\\n";
+            # Case 0: -n
+            $newline = "" if ($args =~ s/\s?(-n)\s?//);
+            # Case 1: Double quote
+            if ($args =~ /^"(.*)"/) {
+                my $string = $1;
+                $string =~ s/\\/\\\\/g;
+                $string =~ s/\\\\"/\\"/g;
+                $retval = "print \"$string$newline\";";
+            }
+            # Case 2: Single quote
+            if ($args =~ /^'(.*)'$/) {
+                my $string = $1;
+                $string =~ s/\\/\\\\/gi;
+                $string =~ s/'\\''/'/gi;
+                $string =~ s/"/\\"/g;
+                $retval = "print \"$string$newline\";";
+            }
+            # Case 3: No quote
+            $retval = "print \"$args$newline\";" if $retval eq "";
+            return $retval;
+        }
 
-    # =============== exit ===============
-    return $_ . ";" if /^exit/;
-    return "\$$1 = <STDIN>;" . indent("chomp \$$1;") if /^read (.*)/;
+        # =============== test ===============
+        elsif ($cmd eq "test"){
+            return parse_test_statement($args)
+        }
+
+        # =============== expr ===============
+        elsif ($cmd eq "expr"){
+            return parse_expr($args);
+        }
+
+        # =============== cd ===============
+        elsif ($cmd eq "cd"){
+            return "chdir '$args';";
+        }
+        # =============== exit ===============
+        elsif ($cmd eq "exit"){
+            return $_ . ";";
+        }
+        elsif ($cmd eq "read"){
+            return "\$$args = <STDIN>;" . indent("chomp \$$args;");
+        }
+    }
 }
 
 # Translate program header
@@ -121,11 +172,6 @@ sub translate_var_assignment {
     } elsif (/^(\w+)=\$(.+)$/) {
         return "\$$1 = \$$2;";
     }
-}
-
-# TODO: Comment after code on the same line
-sub translate_comment {
-    return $_ if /^#/;
 }
 
 # Translate for loop
@@ -171,24 +217,61 @@ sub translate_while_loop {
 # Process for loop list
 sub process_loop_list {
     my ($string) = @_;
-    my @sub_string = split(/\s/, $string);
+    # $string =~ s/^["']?//;
+    # $string =~ s/["']?$//;
+    my @sub_string = split(/\s+/, $string);
+    my $tmp = "";
+    my @list = ();
 
-    # Case 1: More than 1 args in the field
-    if ($#sub_string + 1 != 1){
-        my $retval = join("', '", @sub_string);
+    # GLOB
+    if ($string =~ /\*\.[\w]+$/) {
+        return "glob(\"$string\")";
+    } 
+
+    # The following code snippet is referenced from 
+    # https://www.perlmonks.org/?node_id=212179
+    # --------- Start snippet ---------
+    foreach (@sub_string) {
+        if (/^["'][^"']["']$/){
+            push @list, "$_";
+        }
+        elsif (/^["'].+/) {
+            $tmp = "$_";
+            next;
+        } elsif (/.+["']$/){
+            push @list, "$tmp $_";
+            $tmp = "";
+        } elsif ($tmp && /.+/){
+            $tmp .= " $_";
+        } else {
+            push @list, "$_";
+        }
+    }
+    # --------- End of snippet ---------
+
+    if ($#list + 1 > 1){
+        foreach (@list){
+            $_ =~ s/^['"]//g;
+            $_ =~ s/['"]$//g;
+        }
+        my $retval = join("', '", @list);
         return "'" . $retval . "'";
     }
-    # Case 2: File
     else {
-        return "glob(\"$string\")";
+        foreach (@list){
+            $_ =~ s/^['"]//g;
+            $_ =~ s/['"]$//g;
+        }
+        my $retval = join("', '", @list);
+        return "'" . $retval . "'";
     }
 
 }
 
 sub replace_argv {
     my ($line) = @_;
-    $line =~ s/"?\$@"?/\@ARGV/g;
-    $line =~ s/"?\$\*"?/\@ARGV/g;
+    $line =~ s/\$@/\@ARGV/g;
+    $line =~ s/\$\*/\@ARGV/g;
     $line =~ s/\$#/\$#ARGV + 1/g;
     if ($in_function) {
 
@@ -270,9 +353,8 @@ sub parse_condition_args {
 
 sub parse_backquote {
     my ($statement) = @_;
-    if ($statement =~ /^(\w+)\s(.*)/){
-        if ($1 eq "expr") { return parse_expr($2); }
-    }
+    # print $statement. "\n";
+    return translate_sys_cmd($statement);
 }
 
 sub parse_expr {
